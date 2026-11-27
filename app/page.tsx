@@ -137,7 +137,6 @@ export default function Page() {
                 title="Animation preview"
                 srcDoc={html}
                 className="h-full w-full border-0"
-                sandbox="allow-scripts"
               />
             </div>
           </div>

@@ -77,8 +77,8 @@ body{
 @keyframes hairIn{to{transform:scaleX(1)}}
 
 .vis{
-  width:66cqw;
-  height:66cqw;
+  width:70cqw;
+  height:70cqw;
   flex:0 0 auto;
   margin:0 0 4.5cqw;
   overflow:visible;
@@ -119,13 +119,11 @@ body{
 }
 .w{
   display:inline-block;
-  margin-right:.26em;
   opacity:0;
   transform:translateY(.45em);
   filter:blur(12px);
   animation:wIn 1s var(--d,0s) cubic-bezier(.16,.84,.3,1) forwards;
 }
-.w:last-child{margin-right:0}
 em{font-style:italic;color:var(--bronze)}
 @keyframes wIn{to{opacity:1;transform:translateY(0);filter:blur(0)}}
 
@@ -290,6 +288,7 @@ export const RUNTIME_JS = String.raw`
         w.textContent = raw;
       }
       frag.appendChild(w);
+      frag.appendChild(document.createTextNode(' '));
     }
     return frag;
   }
