@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { buildTimeline } from "@/lib/render/engine";
+import { GRAPHIC_NAMES } from "@/lib/render/graphics";
 import type { Brief, Script, Voice } from "@/lib/pipeline/types";
 import { Button, Panel, Pill, SectionTitle } from "./ui";
 import { StageCanvas } from "./StageCanvas";
@@ -16,8 +17,6 @@ type Props = {
   onNext: () => void;
 };
 
-const THEME_LABEL = { dark: "Ink", light: "Paper" } as const;
-
 export function AnimationTab({ brief, script, voice, revision, onRedo, onRerun, onNext }: Props) {
   const [guides, setGuides] = useState(false);
   const timeline = useMemo(() => buildTimeline(script, voice), [script, voice]);
@@ -27,9 +26,10 @@ export function AnimationTab({ brief, script, voice, revision, onRedo, onRerun, 
       <div>
         <SectionTitle hint="Stage 6">Animation</SectionTitle>
         <p className="mt-2 max-w-xl text-[13px] leading-relaxed text-white/45">
-          Every scene is drawn in code on a 1080×1920 canvas with one palette, one typeface and one
-          easing curve. Captions are keyed to the{" "}
-          {voice.mode === "elevenlabs" ? "measured clip timestamps" : "script timings"}.
+          A structural render, not a finished look: each scene on a 1080×1920 canvas shows which slot
+          holds the headline, which holds the graphic and when the caption lands. Captions are keyed
+          to the {voice.mode === "elevenlabs" ? "measured clip timestamps" : "script timings"}. Real
+          graphics libraries drop into the slots later.
         </p>
       </div>
 
@@ -57,7 +57,7 @@ export function AnimationTab({ brief, script, voice, revision, onRedo, onRerun, 
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-[12px] text-white/75">{scene.text || scene.vo}</p>
                     <p className="truncate text-[10px] uppercase tracking-[0.14em] text-white/25">
-                      {THEME_LABEL[scene.theme]} · graphic {scene.graphic} ·{" "}
+                      {scene.role} · graphic {GRAPHIC_NAMES[scene.graphic] ?? scene.graphic} ·{" "}
                       {entry ? `${entry.start.toFixed(1)}–${entry.end.toFixed(1)}s` : `${scene.dur}s`}
                     </p>
                   </div>

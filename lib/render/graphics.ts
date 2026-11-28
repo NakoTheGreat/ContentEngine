@@ -16,6 +16,17 @@ export type Palette = {
 
 const TAU = Math.PI * 2;
 
+/** Human names for the painters below, used by the structural render slots. */
+export const GRAPHIC_NAMES = [
+  "Bloom",
+  "Frames",
+  "Grid",
+  "Bars",
+  "Burst",
+  "Ribbon",
+  "Type",
+] as const;
+
 function roundRect(
   ctx: CanvasRenderingContext2D,
   x: number,

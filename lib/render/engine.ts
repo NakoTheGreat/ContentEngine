@@ -1,11 +1,27 @@
 import type { Scene, Script, Timeline } from "@/lib/pipeline/types";
-import { clamp01, paintGraphic, roundRectPath, type Palette } from "./graphics";
+import { GRAPHIC_NAMES } from "./graphics";
 
 export type Fonts = { serif: string; sans: string };
 
+/** No brand typography yet — the structural render uses the OS stack. */
 export const DEFAULT_FONTS: Fonts = {
-  serif: '"Instrument Serif", Georgia, "Times New Roman", serif',
-  sans: '"Inter", "Helvetica Neue", Arial, sans-serif',
+  serif: 'system-ui, -apple-system, "Segoe UI", Arial, sans-serif',
+  sans: 'system-ui, -apple-system, "Segoe UI", Arial, sans-serif',
+};
+
+const MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, "Courier New", monospace';
+
+/**
+ * Greyscale scaffolding only: this render shows the mechanism of a scene —
+ * what lands where and when. Colour, type and texture come later as real
+ * graphics libraries that replace the placeholder slots.
+ */
+export const STRUCTURE = {
+  bg: "#101010",
+  ink: "#f3f3f3",
+  label: "rgba(255,255,255,0.55)",
+  faint: "rgba(255,255,255,0.09)",
+  dashed: "rgba(255,255,255,0.18)",
 };
 
 /** Logical render size. Every number below is in these units. */
@@ -13,31 +29,8 @@ export const STAGE = { width: 1080, height: 1920 };
 
 export const SAFE = { top: 0.17, bottom: 0.78 };
 
-export const THEME: Record<"dark" | "light", Palette> = {
-  dark: {
-    bg1: "#171311",
-    bg2: "#070605",
-    ink: "#f4efe7",
-    muted: "rgba(244,239,231,0.48)",
-    accent: "#c89a62",
-    line: "rgba(244,239,231,0.14)",
-  },
-  light: {
-    bg1: "#f8f4ed",
-    bg2: "#e6ddcd",
-    ink: "#17130f",
-    muted: "rgba(23,19,15,0.52)",
-    accent: "#a9743f",
-    line: "rgba(23,19,15,0.14)",
-  },
-};
-
-const clamp01Local = clamp01;
+const clamp01Local = (value: number) => (value < 0 ? 0 : value > 1 ? 1 : value);
 const easeOut = (x: number) => 1 - Math.pow(1 - clamp01Local(x), 3);
-const easeInOut = (x: number) => {
-  const t = clamp01Local(x);
-  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-};
 
 /** Master timeline: real voiceover timestamps when available, estimates otherwise. */
 export function buildTimeline(
@@ -122,6 +115,30 @@ function wrapWords(
   return lines;
 }
 
+function wrapMono(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number,
+  font: string,
+): string[] {
+  ctx.save();
+  ctx.font = font;
+  const lines: string[] = [];
+  let line = "";
+  for (const token of text.split(/\s+/).filter(Boolean)) {
+    const next = line ? `${line} ${token}` : token;
+    if (line && ctx.measureText(next).width > maxWidth) {
+      lines.push(line);
+      line = token;
+    } else {
+      line = next;
+    }
+  }
+  if (line) lines.push(line);
+  ctx.restore();
+  return lines;
+}
+
 export type SceneLayout = {
   kickerY: number;
   headlineY: number;
@@ -189,44 +206,8 @@ export function layoutScene(
   };
 }
 
-/** Backgrounds never change inside a scene, so bake them once per theme/size. */
-const backgroundCache = new Map<string, HTMLCanvasElement>();
+/** Layouts only change when the scene text or the size does. */
 const layoutCache = new Map<string, SceneLayout>();
-
-function backgroundFor(theme: "dark" | "light", W: number, H: number): HTMLCanvasElement | null {
-  if (typeof document === "undefined") return null;
-  const key = `${theme}|${W}|${H}`;
-  const hit = backgroundCache.get(key);
-  if (hit) return hit;
-
-  const canvas = document.createElement("canvas");
-  canvas.width = Math.round(W);
-  canvas.height = Math.round(H);
-  const bake = canvas.getContext("2d");
-  if (!bake) return null;
-
-  const palette = THEME[theme];
-  const gradient = bake.createLinearGradient(0, 0, W * 0.4, H);
-  gradient.addColorStop(0, palette.bg1);
-  gradient.addColorStop(1, palette.bg2);
-  bake.fillStyle = gradient;
-  bake.fillRect(0, 0, W, H);
-
-  const glow = bake.createRadialGradient(W / 2, H * 0.56, 0, W / 2, H * 0.56, W * 0.6);
-  glow.addColorStop(0, rgba(palette.accent, theme === "dark" ? 0.15 : 0.09));
-  glow.addColorStop(1, "rgba(0,0,0,0)");
-  bake.fillStyle = glow;
-  bake.fillRect(0, 0, W, H);
-
-  bake.globalAlpha = 0.65;
-  bake.strokeStyle = palette.line;
-  bake.lineWidth = 2;
-  roundRectPath(bake, W * 0.06, W * 0.06, W * 0.88, H - W * 0.12, 28);
-  bake.stroke();
-
-  backgroundCache.set(key, canvas);
-  return canvas;
-}
 
 function layoutFor(
   ctx: CanvasRenderingContext2D,
@@ -267,136 +248,173 @@ export function drawFrame(ctx: CanvasRenderingContext2D, opts: FrameOptions) {
   ctx.clearRect(0, 0, W, H);
 
   const { index, local, k } = sceneAt(timeline, t);
-  const scene = script.scenes[Math.min(index, script.scenes.length - 1)];
+  const safeIndex = Math.min(index, script.scenes.length - 1);
+  const scene = script.scenes[safeIndex];
+
+  const frame = { script, timeline, W, H, fonts, guides: Boolean(opts.guides), t };
 
   if (k < 1 && index > 0) {
-    const prev = script.scenes[index - 1];
-    drawScene(ctx, prev, timeline.scenes[index - 1].dur, W, H, fonts, 1);
-    drawScene(ctx, scene, local, W, H, fonts, k);
+    drawScene(ctx, { ...frame, scene: script.scenes[index - 1], index: index - 1, local: 0, alpha: 1 });
+    drawScene(ctx, { ...frame, scene, index: safeIndex, local, alpha: k });
   } else {
-    drawScene(ctx, scene, local, W, H, fonts, 1);
+    drawScene(ctx, { ...frame, scene, index: safeIndex, local, alpha: 1 });
   }
 
-  if (opts.guides) drawGuides(ctx, W, H);
   ctx.restore();
 }
 
-function drawScene(
-  ctx: CanvasRenderingContext2D,
-  scene: Scene,
-  local: number,
-  W: number,
-  H: number,
-  fonts: Fonts,
-  alpha: number,
-) {
-  const palette = THEME[scene.theme];
+type SceneFrame = {
+  scene: Scene;
+  index: number;
+  local: number;
+  alpha: number;
+  script: Script;
+  timeline: Timeline;
+  W: number;
+  H: number;
+  fonts: Fonts;
+  guides: boolean;
+  t: number;
+};
+
+/** One scene, drawn as boxes and labels: the shape of the cut, not the look. */
+function drawScene(ctx: CanvasRenderingContext2D, frame: SceneFrame) {
+  const { scene, index, local, alpha, timeline, W, H, fonts, guides } = frame;
+  const pad = W * 0.09;
+  const inner = W - pad * 2;
+  const total = timeline.scenes.length || frame.script.scenes.length;
+  const dur = timeline.scenes[index]?.dur ?? scene.dur;
+
   ctx.save();
   ctx.globalAlpha = alpha;
+  ctx.fillStyle = STRUCTURE.bg;
+  ctx.fillRect(0, 0, W, H);
 
-  const background = backgroundFor(scene.theme, W, H);
-  if (background) {
-    ctx.drawImage(background, 0, 0, W, H);
-  } else {
-    ctx.fillStyle = palette.bg2;
-    ctx.fillRect(0, 0, W, H);
-  }
+  // Frame edge.
+  ctx.strokeStyle = STRUCTURE.faint;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(pad, pad, inner, H - pad * 2);
+
+  drawSafeArea(ctx, W, H, guides);
 
   const layout = layoutFor(ctx, scene, fonts, W, H);
+  ctx.textBaseline = "alphabetic";
 
-  paintGraphic(
-    ctx,
-    scene.graphic,
-    clamp01((local - 0.1) / 1.5),
-    palette,
-    layout.graphic.cx,
-    layout.graphic.cy,
-    layout.graphic.r,
-  );
-
-  // Kicker.
-  const kickerText = (
-    scene.role === "hook" ? "Hook" : scene.role === "cta" ? "Your move" : scene.visual.split(/[,.:]/)[0]
-  ).toUpperCase();
-  const kickerAlpha = easeOut(local / 0.45) * alpha;
-  ctx.globalAlpha = kickerAlpha;
-  ctx.fillStyle = palette.accent;
-  ctx.beginPath();
-  ctx.arc(W * 0.09 + 6, layout.kickerY - 9, 6, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = palette.muted;
-  ctx.font = `500 24px ${fonts.sans}`;
-  setTracking(ctx, "5px");
-  ctx.fillText(kickerText.slice(0, 30), W * 0.09 + 26, layout.kickerY);
+  // Scene header: which beat this is, how long it holds.
+  ctx.font = `500 24px ${MONO}`;
+  ctx.fillStyle = STRUCTURE.label;
+  ctx.textAlign = "left";
+  setTracking(ctx, "4px");
+  ctx.fillText(`SCENE ${scene.n}/${total} · ${scene.role.toUpperCase()}`, pad, layout.kickerY - 40);
+  ctx.textAlign = "right";
+  ctx.fillText(`${dur.toFixed(1)}s`, W - pad, layout.kickerY - 40);
   setTracking(ctx, "0px");
 
-  // Headline, word by word.
-  const reveal = easeOut((local - 0.06) / 0.85);
+  // Headline slot.
+  const size = layout.headlineSize;
+  const lineHeight = layout.headlineLineHeight;
+  const boxTop = layout.headlineY - size * 0.92;
+  const boxHeight = lineHeight * layout.headlineLines.length;
+  slot(ctx, pad, boxTop, inner, boxHeight, "HEADLINE");
+
+  ctx.fillStyle = STRUCTURE.ink;
+  ctx.textAlign = "left";
   layout.headlineLines.forEach((line, lineIndex) => {
-    drawLine(
-      ctx,
-      words(line),
-      W * 0.09,
-      layout.headlineY + lineIndex * layout.headlineLineHeight,
-      layout.headlineSize,
-      palette,
-      fonts.serif,
-      alpha,
-      reveal * 1.5 - lineIndex * 0.3,
-    );
+    let cursor = pad;
+    ctx.font = `400 ${size}px ${fonts.serif}`;
+    words(line).forEach((word, wordIndex, list) => {
+      ctx.fillText(word.text, cursor, layout.headlineY + lineIndex * lineHeight);
+      cursor += ctx.measureText(word.text).width;
+      if (wordIndex < list.length - 1) cursor += ctx.measureText(" ").width;
+    });
   });
 
-  // Caption block.
-  if (layout.captionLines.length) {
-    const captionAlpha = easeInOut((local - 0.5) / 0.55) * alpha;
-    if (captionAlpha > 0.01) {
-      ctx.save();
-      ctx.globalAlpha = captionAlpha;
-      ctx.fillStyle = palette.accent;
-      roundRectPath(ctx, W * 0.09, layout.captionY - 58, 64, 5, 2.5);
-      ctx.fill();
-      ctx.fillStyle = palette.ink;
-      setTracking(ctx, "0px");
-      layout.captionLines.forEach((line, i) => {
-        ctx.font = `600 ${layout.captionSize}px ${fonts.sans}`;
-        ctx.fillText(line, W * 0.09, layout.captionY + i * layout.captionLineHeight);
-      });
-      ctx.restore();
-    }
+  // Graphic slot: the placeholder a real graphics library fills.
+  const slotW = W * 0.58;
+  const slotH = W * 0.38;
+  const slotX = layout.graphic.cx - slotW / 2;
+  const slotY = layout.graphic.cy - slotH / 2;
+  const name = GRAPHIC_NAMES[scene.graphic] ?? `library ${scene.graphic}`;
+  slot(ctx, slotX, slotY, slotW, slotH, "GRAPHIC");
+  ctx.textAlign = "center";
+  ctx.fillStyle = STRUCTURE.label;
+  ctx.font = `500 30px ${MONO}`;
+  setTracking(ctx, "3px");
+  ctx.fillText(`#${scene.graphic} ${name.toUpperCase()}`, layout.graphic.cx, layout.graphic.cy);
+  setTracking(ctx, "0px");
+  ctx.font = `400 20px ${MONO}`;
+  ctx.fillStyle = "rgba(255,255,255,0.32)";
+  ctx.fillText("animated painter goes here", layout.graphic.cx, layout.graphic.cy + 46);
+
+  // Caption slot: what the voiceover puts on screen.
+  const capFont = `400 28px ${MONO}`;
+  const capLines = wrapMono(ctx, scene.vo, inner - 32, capFont).slice(0, 2);
+  const capTop = layout.captionY - 54;
+  const capHeight = Math.max(96, capLines.length * 38 + 46);
+  slot(ctx, pad, capTop, inner, capHeight, "CAPTION");
+  ctx.textAlign = "left";
+  ctx.font = capFont;
+  ctx.fillStyle = layout.captionLines.length ? "rgba(255,255,255,0.78)" : "rgba(255,255,255,0.3)";
+  if (capLines.length) {
+    capLines.forEach((line, i) => {
+      ctx.fillText(line, pad + 16, capTop + 48 + i * 38);
+    });
+  } else {
+    ctx.fillText("spoken only — no caption", pad + 16, capTop + 48);
   }
+
+  // Scene clock and progress.
+  const barY = H * 0.945;
+  ctx.strokeStyle = STRUCTURE.faint;
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.moveTo(pad, barY);
+  ctx.lineTo(W - pad, barY);
+  ctx.stroke();
+  ctx.strokeStyle = STRUCTURE.ink;
+  ctx.beginPath();
+  ctx.moveTo(pad, barY);
+  ctx.lineTo(pad + inner * clamp01Local(local / Math.max(dur, 0.01)), barY);
+  ctx.stroke();
+
+  ctx.font = `400 20px ${MONO}`;
+  ctx.fillStyle = "rgba(255,255,255,0.34)";
+  ctx.textAlign = "left";
+  ctx.fillText(
+    `t ${local.toFixed(1)}s / ${dur.toFixed(1)}s · ${frame.t.toFixed(1)}s of ${timeline.total}s`,
+    pad,
+    barY + 34,
+  );
 
   ctx.restore();
 }
 
-function drawLine(
+/** Dashed box with a mono label sitting on its top edge. */
+function slot(
   ctx: CanvasRenderingContext2D,
-  list: Word[],
   x: number,
-  baseline: number,
-  size: number,
-  palette: Palette,
-  family: string,
-  alpha: number,
-  reveal: number,
+  y: number,
+  w: number,
+  h: number,
+  label: string,
 ) {
-  let cursor = x;
   ctx.save();
-  ctx.textBaseline = "alphabetic";
+  ctx.setLineDash([12, 10]);
+  ctx.strokeStyle = STRUCTURE.dashed;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x, y, w, h);
+  ctx.setLineDash([]);
+
+  ctx.font = `500 18px ${MONO}`;
+  ctx.fillStyle = STRUCTURE.label;
   ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+  setTracking(ctx, "4px");
+  ctx.fillStyle = STRUCTURE.bg;
+  ctx.fillRect(x, y - 13, ctx.measureText(label).width + 20, 26);
+  ctx.fillStyle = STRUCTURE.label;
+  ctx.fillText(label, x + 10, y + 6);
   setTracking(ctx, "0px");
-
-  list.forEach((word, index) => {
-    const local = clamp01((reveal - index * 0.06) / 0.55);
-    const eased = easeOut(local);
-    ctx.globalAlpha = alpha * eased;
-    ctx.fillStyle = word.emphasis ? palette.accent : palette.ink;
-    ctx.font = `${word.emphasis ? "italic " : ""}400 ${size}px ${family}`;
-    ctx.fillText(word.text, cursor, baseline + (1 - eased) * size * 0.26);
-    cursor += ctx.measureText(word.text).width;
-    ctx.font = `400 ${size}px ${family}`;
-    if (index < list.length - 1) cursor += ctx.measureText(" ").width;
-  });
-
   ctx.restore();
 }
 
@@ -406,23 +424,10 @@ function setTracking(ctx: CanvasRenderingContext2D, value: string) {
   }
 }
 
-function rgba(hex: string, alpha: number): string {
-  const clean = hex.replace("#", "");
-  const full =
-    clean.length === 3
-      ? clean
-          .split("")
-          .map((c) => c + c)
-          .join("")
-      : clean;
-  const value = parseInt(full, 16);
-  return `rgba(${(value >> 16) & 255},${(value >> 8) & 255},${value & 255},${alpha})`;
-}
-
-function drawGuides(ctx: CanvasRenderingContext2D, W: number, H: number) {
+function drawSafeArea(ctx: CanvasRenderingContext2D, W: number, H: number, guides: boolean) {
   ctx.save();
   ctx.setLineDash([14, 14]);
-  ctx.strokeStyle = "rgba(200,154,98,0.5)";
+  ctx.strokeStyle = STRUCTURE.dashed;
   ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.moveTo(0, H * SAFE.top);
@@ -430,6 +435,26 @@ function drawGuides(ctx: CanvasRenderingContext2D, W: number, H: number) {
   ctx.moveTo(0, H * SAFE.bottom);
   ctx.lineTo(W, H * SAFE.bottom);
   ctx.stroke();
+  setTracking(ctx, "3px");
+
+  ctx.font = `500 18px ${MONO}`;
+  ctx.fillStyle = "rgba(255,255,255,0.4)";
+  ctx.textAlign = "left";
+  ctx.fillText("SAFE TOP 17%", 24, H * SAFE.top - 12);
+  ctx.fillText("SAFE BOTTOM 78%", 24, H * SAFE.bottom + 28);
+
+  if (guides) {
+    ctx.setLineDash([6, 12]);
+    ctx.strokeStyle = "rgba(255,255,255,0.12)";
+    for (let i = 1; i < 3; i++) {
+      ctx.beginPath();
+      ctx.moveTo((W * i) / 3, 0);
+      ctx.lineTo((W * i) / 3, H);
+      ctx.moveTo(0, (H * i) / 3);
+      ctx.lineTo(W, (H * i) / 3);
+      ctx.stroke();
+    }
+  }
   ctx.restore();
 }
 
